@@ -1,181 +1,194 @@
-import { getPricingPlan, getPricingTool, type UseCase } from "@/lib/pricingData"
+import {
+  getPlanPricing,
+  getToolPricing,
+  TOOL_PRICING,
+  ToolId,
+  UseCase,
+} from "@/lib/pricingData"
 
-export type AuditToolInput = {
+export type AuditInputTool = {
   id: string
-  toolId: string
+  toolId: ToolId
   planId: string
   monthlySpend: number
-  seats: number
+  totalSeats: number
   activeUsers: number
 }
 
 export type AuditInput = {
   teamSize: number
   useCase: UseCase
-  tools: AuditToolInput[]
+  tools: AuditInputTool[]
 }
 
 export type AuditRecommendation = {
-  type: "seats" | "downgrade" | "api-review" | "switch"
+  rule: "unused-seats" | "overqualified-plan" | "api-review" | "switch-tool" | "credits"
   title: string
   detail: string
   monthlySavings: number
 }
 
-export type ToolAuditResult = AuditToolInput & {
+export type ToolAudit = AuditInputTool & {
   toolName: string
   planName: string
-  utilization: number
-  wastedMonthlySpend: number
-  riskLevel: "low" | "medium" | "high"
+  utilizationRate: number
+  risk: "low" | "medium" | "high"
+  monthlySavings: number
+  annualSavings: number
   recommendations: AuditRecommendation[]
 }
 
-export type SavingsTier = "high" | "medium" | "low" | "optimal"
-
 export type AuditResult = {
   totalMonthlySpend: number
-  totalMonthlySavings: number
-  annualSavings: number
-  utilization: number
-  savingsTier: SavingsTier
-  headline: string
-  upsellMessage: string
-  tools: ToolAuditResult[]
-}
-
-function currency(amount: number) {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 0,
-  }).format(amount)
-}
-
-function getSavingsTier(savings: number): SavingsTier {
-  if (savings >= 500) return "high"
-  if (savings >= 250) return "medium"
-  if (savings >= 100) return "low"
-  return "optimal"
-}
-
-function getCheaperAlternative(toolId: string, useCase: UseCase) {
-  const codingAlternatives = new Set(["cursor", "github-copilot", "windsurf"])
-  const assistantAlternatives = new Set(["chatgpt", "claude", "gemini"])
-
-  if (useCase === "coding" && assistantAlternatives.has(toolId)) {
-    return "GitHub Copilot or Cursor"
-  }
-
-  if ((useCase === "writing" || useCase === "research") && codingAlternatives.has(toolId)) {
-    return "Claude, ChatGPT, or Gemini"
-  }
-
-  return null
+  totalAnnualSpend: number
+  estimatedMonthlySavings: number
+  estimatedAnnualSavings: number
+  savingsTier: "high" | "medium" | "low" | "optimal"
+  summary: string
+  tools: ToolAudit[]
 }
 
 export function runAudit(input: AuditInput): AuditResult {
-  const auditedTools = input.tools.map((tool): ToolAuditResult => {
-    const pricingTool = getPricingTool(tool.toolId)
-    const pricingPlan = getPricingPlan(tool.toolId, tool.planId)
-    const toolName = pricingTool?.name ?? "Unknown tool"
-    const planName = pricingPlan?.name ?? "Custom plan"
-    const safeSeats = Math.max(tool.seats, 1)
-    const safeActiveUsers = Math.max(tool.activeUsers, 0)
-    const utilization = Math.min(Math.round((safeActiveUsers / safeSeats) * 100), 100)
-    const recommendations: AuditRecommendation[] = []
-
-    const unusedSeats = Math.max(tool.seats - tool.activeUsers, 0)
-    const spendPerSeat = tool.seats > 0 ? tool.monthlySpend / tool.seats : tool.monthlySpend
-
-    if (tool.seats > input.teamSize) {
-      const extraSeats = tool.seats - input.teamSize
-      recommendations.push({
-        type: "seats",
-        title: "Seat count exceeds team size",
-        detail: `Reduce ${extraSeats} seat${extraSeats === 1 ? "" : "s"} so this tool matches your ${input.teamSize}-person team.`,
-        monthlySavings: Math.round(extraSeats * spendPerSeat),
-      })
-    } else if (unusedSeats > 0 && utilization < 75) {
-      recommendations.push({
-        type: "seats",
-        title: "Unused seats are inflating spend",
-        detail: `Remove ${unusedSeats} inactive seat${unusedSeats === 1 ? "" : "s"} or reassign them to active teammates.`,
-        monthlySavings: Math.round(unusedSeats * spendPerSeat),
-      })
-    }
-
-    const lowerPlan = pricingTool?.plans
-      .filter((plan) => plan.rank < (pricingPlan?.rank ?? 0))
-      .sort((a, b) => b.rank - a.rank)[0]
-
-    if (pricingPlan && lowerPlan && pricingPlan.rank >= 3 && utilization < 80) {
-      const downgradeSavings = Math.max((pricingPlan.monthlyPrice - lowerPlan.monthlyPrice) * safeSeats, 0)
-      recommendations.push({
-        type: "downgrade",
-        title: "Plan looks overqualified",
-        detail: `${planName} may be more than this team needs. Try ${lowerPlan.name} for the next billing cycle.`,
-        monthlySavings: Math.round(downgradeSavings),
-      })
-    }
-
-    if (pricingTool?.category === "api" && tool.monthlySpend >= 300) {
-      recommendations.push({
-        type: "api-review",
-        title: "API spend needs a usage review",
-        detail: "Check prompts, caching, model choice, and failed requests before adding more budget.",
-        monthlySavings: Math.round(tool.monthlySpend * 0.18),
-      })
-    }
-
-    const alternative = getCheaperAlternative(tool.toolId, input.useCase)
-    if (alternative && tool.monthlySpend >= 100) {
-      recommendations.push({
-        type: "switch",
-        title: "Tool may not fit the main use case",
-        detail: `For ${input.useCase} work, compare this against ${alternative} before renewal.`,
-        monthlySavings: Math.round(tool.monthlySpend * 0.15),
-      })
-    }
-
-    const uniqueSavings = Math.min(
-      Math.round(recommendations.reduce((sum, recommendation) => sum + recommendation.monthlySavings, 0)),
-      tool.monthlySpend
-    )
-
-    return {
-      ...tool,
-      toolName,
-      planName,
-      utilization,
-      wastedMonthlySpend: uniqueSavings,
-      riskLevel: uniqueSavings >= 250 || utilization < 40 ? "high" : uniqueSavings >= 100 || utilization < 70 ? "medium" : "low",
-      recommendations,
-    }
-  })
-
-  const totalMonthlySpend = Math.round(input.tools.reduce((sum, tool) => sum + tool.monthlySpend, 0))
-  const totalMonthlySavings = Math.round(auditedTools.reduce((sum, tool) => sum + tool.wastedMonthlySpend, 0))
-  const totalSeats = input.tools.reduce((sum, tool) => sum + tool.seats, 0)
-  const totalActiveUsers = input.tools.reduce((sum, tool) => sum + tool.activeUsers, 0)
-  const savingsTier = getSavingsTier(totalMonthlySavings)
+  const tools = input.tools.map((tool) => auditTool(tool, input.teamSize, input.useCase))
+  const totalMonthlySpend = roundMoney(tools.reduce((sum, tool) => sum + tool.monthlySpend, 0))
+  const estimatedMonthlySavings = roundMoney(tools.reduce((sum, tool) => sum + tool.monthlySavings, 0))
 
   return {
     totalMonthlySpend,
-    totalMonthlySavings,
-    annualSavings: totalMonthlySavings * 12,
-    utilization: totalSeats > 0 ? Math.round((totalActiveUsers / totalSeats) * 100) : 0,
-    savingsTier,
-    headline:
-      savingsTier === "optimal"
-        ? "You're spending well."
-        : `You could save ${currency(totalMonthlySavings)}/mo on AI tools.`,
-    upsellMessage:
-      totalMonthlySavings >= 500
-        ? "Credex can turn this audit into vendor cuts, renewal strategy, and founder-ready savings in one sprint."
-        : totalMonthlySavings < 100
-          ? "Your AI stack is lean. Keep reviewing seats before each renewal."
-          : "Prioritize the highest-risk renewals first, then re-check usage next month.",
-    tools: auditedTools,
+    totalAnnualSpend: roundMoney(totalMonthlySpend * 12),
+    estimatedMonthlySavings,
+    estimatedAnnualSavings: roundMoney(estimatedMonthlySavings * 12),
+    savingsTier: getSavingsTier(estimatedMonthlySavings),
+    summary: buildFallbackSummary(estimatedMonthlySavings, totalMonthlySpend),
+    tools,
   }
 }
+
+function auditTool(tool: AuditInputTool, teamSize: number, useCase: UseCase): ToolAudit {
+  const pricing = getToolPricing(tool.toolId)
+  const plan = getPlanPricing(tool.toolId, tool.planId)
+  const billableSeats = Math.max(tool.totalSeats, 1)
+  const activeUsers = Math.max(tool.activeUsers, 0)
+  const utilizationRate = Math.min(100, Math.round((activeUsers / billableSeats) * 100))
+  const recommendations: AuditRecommendation[] = []
+
+  const unusedSeats = Math.max(tool.totalSeats - activeUsers, 0)
+  if (plan?.billingUnit === "seat" && unusedSeats > 0) {
+    recommendations.push({
+      rule: "unused-seats",
+      title: "Trim unused seats",
+      detail: `${unusedSeats} of ${tool.totalSeats} paid seats appear inactive. Keep seats close to active users and re-add only when usage returns.`,
+      monthlySavings: unusedSeats * plan.monthlyPrice,
+    })
+  }
+
+  if (plan?.minimumSeats && teamSize < plan.minimumSeats) {
+    const downgrade = pricing?.plans
+      .filter((candidate) => candidate.billingUnit === "seat")
+      .filter((candidate) => candidate.monthlyPrice < plan.monthlyPrice)
+      .filter((candidate) => !candidate.minimumSeats || teamSize >= candidate.minimumSeats)
+      .sort((a, b) => b.monthlyPrice - a.monthlyPrice)[0]
+
+    if (downgrade) {
+      recommendations.push({
+        rule: "overqualified-plan",
+        title: "Downgrade the plan",
+        detail: `${plan.name} is built for larger teams. ${downgrade.name} fits a ${teamSize}-person team with similar core capability.`,
+        monthlySavings: Math.max((plan.monthlyPrice - downgrade.monthlyPrice) * Math.max(activeUsers, 1), 0),
+      })
+    }
+  }
+
+  if ((pricing?.category === "api" || plan?.billingUnit === "usage") && tool.monthlySpend >= 250) {
+    recommendations.push({
+      rule: "api-review",
+      title: "Review API usage",
+      detail: "High direct API spend is worth checking for model mix, prompt caching, batch jobs, and stale background usage.",
+      monthlySavings: Math.round(tool.monthlySpend * 0.2),
+    })
+  }
+
+  const alternative = findCheaperAlternative(tool.toolId, useCase, tool.monthlySpend, activeUsers)
+  if (alternative) {
+    recommendations.push({
+      rule: "switch-tool",
+      title: "Consider a cheaper fit",
+      detail: `${alternative.toolName} ${alternative.planName} is a lower-cost fit for ${useCase} work at this team size.`,
+      monthlySavings: alternative.savings,
+    })
+  }
+
+  if (tool.monthlySpend > 500 && ["cursor", "claude", "chatgpt"].includes(tool.toolId)) {
+    recommendations.push({
+      rule: "credits",
+      title: "Check discounted credits",
+      detail: "This spend is large enough that discounted credits or a negotiated procurement path can matter more than small plan tweaks.",
+      monthlySavings: Math.round(tool.monthlySpend * 0.15),
+    })
+  }
+
+  const monthlySavings = roundMoney(Math.min(tool.monthlySpend, recommendations.reduce((sum, item) => sum + item.monthlySavings, 0)))
+
+  return {
+    ...tool,
+    toolName: pricing?.name ?? "Unknown tool",
+    planName: plan?.name ?? "Unknown plan",
+    utilizationRate,
+    risk: getRisk(monthlySavings, utilizationRate),
+    monthlySavings,
+    annualSavings: roundMoney(monthlySavings * 12),
+    recommendations,
+  }
+}
+
+function findCheaperAlternative(toolId: ToolId, useCase: UseCase, monthlySpend: number, activeUsers: number) {
+  const candidates = TOOL_PRICING.flatMap((tool) =>
+    tool.plans
+      .filter(() => tool.id !== toolId)
+      .filter((plan) => plan.billingUnit === "seat")
+      .filter((plan) => plan.bestFor.includes(useCase))
+      .map((plan) => ({
+        toolName: tool.name,
+        planName: plan.name,
+        estimatedSpend: plan.monthlyPrice * Math.max(activeUsers, 1),
+      }))
+  ).sort((a, b) => a.estimatedSpend - b.estimatedSpend)
+
+  const best = candidates[0]
+  if (!best || monthlySpend - best.estimatedSpend < 100) return null
+
+  return {
+    ...best,
+    savings: roundMoney(monthlySpend - best.estimatedSpend),
+  }
+}
+
+function getRisk(monthlySavings: number, utilizationRate: number): ToolAudit["risk"] {
+  if (monthlySavings >= 250 || utilizationRate < 50) return "high"
+  if (monthlySavings >= 100 || utilizationRate < 75) return "medium"
+  return "low"
+}
+
+function getSavingsTier(savings: number): AuditResult["savingsTier"] {
+  if (savings > 500) return "high"
+  if (savings >= 100) return "medium"
+  if (savings > 0) return "low"
+  return "optimal"
+}
+
+function buildFallbackSummary(savings: number, spend: number) {
+  if (savings > 500) {
+    return `This stack shows $${savings}/mo in likely savings against $${spend}/mo of AI spend. The largest opportunities should be reviewed before renewal, especially unused seats, oversized plans, API usage, and discounted credit options.`
+  }
+
+  if (savings < 100) {
+    return `You are spending well. The audit found only $${savings}/mo in obvious savings against $${spend}/mo of AI spend, so there is no need to force a downgrade just to show activity.`
+  }
+
+  return `This audit found $${savings}/mo in practical savings against $${spend}/mo of AI spend. The best next step is to clean up seats and downgrade any plan that is oversized for current usage.`
+}
+
+function roundMoney(value: number) {
+  return Math.max(0, Math.round(value))
+}
+

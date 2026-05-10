@@ -1,208 +1,146 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
-import { Badge } from "@/components/ui/badge"
+import { useEffect, useMemo, useState } from "react"
+import { Plus, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import type { AuditInput, AuditToolInput } from "@/lib/auditEngine"
-import { PRICING_TOOLS, USE_CASE_OPTIONS, getPricingPlan, getPricingTool, type UseCase } from "@/lib/pricingData"
-import { Plus, Trash2 } from "lucide-react"
+import { AuditInputTool } from "@/lib/auditEngine"
+import {
+  estimatePlanSpend,
+  getPlanPricing,
+  getToolPricing,
+  TOOL_PRICING,
+  ToolId,
+  USE_CASE_LABELS,
+  UseCase,
+} from "@/lib/pricingData"
 
-const STORAGE_KEY = "credex-ai-spend-form"
-
-type FormState = {
-  teamSize: string
+export type AuditFormValues = {
+  teamSize: number
   useCase: UseCase
-  tools: AuditToolInput[]
-  draft: {
-    toolId: string
-    planId: string
-    seats: string
-    activeUsers: string
-    monthlySpend: string
-  }
+  tools: AuditInputTool[]
 }
 
-const defaultTool = PRICING_TOOLS[0]
-const defaultPlan = defaultTool.plans[0]
+const STORAGE_KEY = "credex-ai-spend-audit-form"
 
-const DEFAULT_STATE: FormState = {
-  teamSize: "10",
-  useCase: "coding",
-  tools: [],
-  draft: {
-    toolId: defaultTool.id,
-    planId: defaultPlan.id,
-    seats: "10",
-    activeUsers: "7",
-    monthlySpend: String(defaultPlan.monthlyPrice * 10),
-  },
+const defaultTool: AuditInputTool = {
+  id: "tool-1",
+  toolId: "github-copilot",
+  planId: "business",
+  monthlySpend: 190,
+  totalSeats: 10,
+  activeUsers: 7,
 }
 
-function currency(amount: number) {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 0,
-  }).format(amount)
-}
-
-function parsePositiveInt(value: string) {
-  return Math.max(Number.parseInt(value, 10) || 0, 0)
-}
-
-export default function SpendForm({
-  onSubmit,
-}: {
-  onSubmit: (input: AuditInput) => void
-}) {
-  const [form, setForm] = useState<FormState>(DEFAULT_STATE)
-  const hasLoadedSavedForm = useRef(false)
-
-  const selectedTool = getPricingTool(form.draft.toolId) ?? defaultTool
-  const selectedPlan = getPricingPlan(form.draft.toolId, form.draft.planId) ?? selectedTool.plans[0]
-  const isUsagePlan = selectedPlan.billingUnit === "usage"
-  const seats = parsePositiveInt(form.draft.seats)
-  const activeUsers = parsePositiveInt(form.draft.activeUsers)
-  const teamSize = parsePositiveInt(form.teamSize)
-  const monthlySpend = Number.parseFloat(form.draft.monthlySpend) || 0
-
-  const computedSeatSpend = selectedPlan.monthlyPrice * seats
-  const canAddTool = teamSize > 0 && monthlySpend >= 0 && seats > 0 && activeUsers >= 0 && activeUsers <= seats
-  const canRunAudit = teamSize > 0 && form.tools.length > 0
+export default function SpendForm({ onSubmit }: { onSubmit: (values: AuditFormValues) => void }) {
+  const [teamSize, setTeamSize] = useState(10)
+  const [useCase, setUseCase] = useState<UseCase>("coding")
+  const [tools, setTools] = useState<AuditInputTool[]>([defaultTool])
+  const [hydrated, setHydrated] = useState(false)
 
   useEffect(() => {
-    const timeout = window.setTimeout(() => {
+    try {
       const saved = window.localStorage.getItem(STORAGE_KEY)
-      if (!saved) {
-        hasLoadedSavedForm.current = true
-        return
+      if (saved) {
+        const parsed = JSON.parse(saved) as AuditFormValues
+        setTeamSize(parsed.teamSize || 10)
+        setUseCase(parsed.useCase || "coding")
+        setTools(parsed.tools?.length ? parsed.tools : [defaultTool])
       }
-
-      try {
-        setForm({ ...DEFAULT_STATE, ...JSON.parse(saved) })
-      } catch {
-        window.localStorage.removeItem(STORAGE_KEY)
-      }
-
-      hasLoadedSavedForm.current = true
-    }, 0)
-
-    return () => window.clearTimeout(timeout)
+    } finally {
+      setHydrated(true)
+    }
   }, [])
 
   useEffect(() => {
-    if (!hasLoadedSavedForm.current) return
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(form))
-  }, [form])
+    if (!hydrated) return
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ teamSize, useCase, tools }))
+  }, [hydrated, teamSize, useCase, tools])
 
-  function updateDraft(nextDraft: Partial<FormState["draft"]>) {
-    setForm((current) => ({
-      ...current,
-      draft: {
-        ...current.draft,
-        ...nextDraft,
-      },
-    }))
-  }
-
-  function selectTool(toolId: string) {
-    const nextTool = getPricingTool(toolId) ?? defaultTool
-    const nextPlan = nextTool.plans[0]
-    const nextSeats = form.draft.seats || "1"
-    updateDraft({
-      toolId: nextTool.id,
-      planId: nextPlan.id,
-      monthlySpend: String(nextPlan.billingUnit === "usage" ? 100 : nextPlan.monthlyPrice * parsePositiveInt(nextSeats)),
-    })
-  }
-
-  function selectPlan(planId: string) {
-    const nextPlan = getPricingPlan(form.draft.toolId, planId) ?? selectedPlan
-    updateDraft({
-      planId: nextPlan.id,
-      monthlySpend: String(nextPlan.billingUnit === "usage" ? monthlySpend || 100 : nextPlan.monthlyPrice * seats),
-    })
-  }
-
-  function updateSeats(value: string) {
-    const nextSeats = parsePositiveInt(value)
-    updateDraft({
-      seats: value,
-      monthlySpend: isUsagePlan ? form.draft.monthlySpend : String(selectedPlan.monthlyPrice * nextSeats),
-    })
-  }
+  const canRunAudit = useMemo(
+    () => teamSize > 0 && tools.length > 0 && tools.every((tool) => tool.monthlySpend >= 0 && tool.totalSeats > 0 && tool.activeUsers >= 0),
+    [teamSize, tools]
+  )
 
   function addTool() {
-    if (!canAddTool) return
+    const tool = TOOL_PRICING[0]
+    const plan = tool.plans[1] ?? tool.plans[0]
+    const totalSeats = Math.max(teamSize, 1)
 
-    setForm((current) => ({
+    setTools((current) => [
       ...current,
-      tools: [
-        ...current.tools,
-        {
-          id: crypto.randomUUID(),
-          toolId: current.draft.toolId,
-          planId: current.draft.planId,
-          monthlySpend,
-          seats,
-          activeUsers,
-        },
-      ],
-      draft: {
-        ...current.draft,
-        activeUsers: "",
+      {
+        id: crypto.randomUUID(),
+        toolId: tool.id,
+        planId: plan.id,
+        monthlySpend: estimatePlanSpend(tool.id, plan.id, totalSeats),
+        totalSeats,
+        activeUsers: totalSeats,
       },
-    }))
+    ])
   }
 
   function removeTool(id: string) {
-    setForm((current) => ({
-      ...current,
-      tools: current.tools.filter((tool) => tool.id !== id),
-    }))
+    setTools((current) => current.filter((tool) => tool.id !== id))
   }
 
-  function runAudit() {
-    if (!canRunAudit) return
-    onSubmit({
-      teamSize,
-      useCase: form.useCase,
-      tools: form.tools,
-    })
+  function updateTool(id: string, updates: Partial<AuditInputTool>) {
+    setTools((current) =>
+      current.map((tool) => {
+        if (tool.id !== id) return tool
+
+        const next = { ...tool, ...updates }
+
+        if (updates.toolId) {
+          const pricing = getToolPricing(updates.toolId)
+          const plan = pricing?.plans[0]
+          next.planId = plan?.id ?? next.planId
+          next.monthlySpend = estimatePlanSpend(next.toolId, next.planId, next.totalSeats)
+        }
+
+        if (updates.planId || updates.totalSeats) {
+          const plan = getPlanPricing(next.toolId, next.planId)
+          if (plan?.billingUnit === "seat") {
+            next.monthlySpend = estimatePlanSpend(next.toolId, next.planId, next.totalSeats)
+          }
+        }
+
+        return next
+      })
+    )
   }
 
   return (
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Team profile</CardTitle>
+          <CardTitle>Audit setup</CardTitle>
         </CardHeader>
-        <CardContent className="grid gap-4 sm:grid-cols-2">
+        <CardContent className="grid gap-3 sm:grid-cols-2">
           <div className="space-y-2">
             <Label htmlFor="team-size">Team size</Label>
             <Input
               id="team-size"
+              min={1}
               type="number"
-              min="1"
-              value={form.teamSize}
-              onChange={(event) => setForm((current) => ({ ...current, teamSize: event.target.value }))}
+              value={teamSize}
+              onChange={(event) => setTeamSize(Number(event.target.value))}
             />
           </div>
           <div className="space-y-2">
             <Label htmlFor="use-case">Primary use case</Label>
             <select
               id="use-case"
-              value={form.useCase}
               suppressHydrationWarning
-              onChange={(event) => setForm((current) => ({ ...current, useCase: event.target.value as UseCase }))}
-              className="h-8 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+              className="h-8 w-full rounded-lg border border-input bg-background px-2.5 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+              value={useCase}
+              onChange={(event) => setUseCase(event.target.value as UseCase)}
             >
-              {USE_CASE_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
+              {Object.entries(USE_CASE_LABELS).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
                 </option>
               ))}
             </select>
@@ -210,124 +148,106 @@ export default function SpendForm({
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Add AI tool</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor="tool">Tool</Label>
-              <select
-                id="tool"
-                value={form.draft.toolId}
-                suppressHydrationWarning
-                onChange={(event) => selectTool(event.target.value)}
-                className="h-8 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-              >
-                {PRICING_TOOLS.map((tool) => (
-                  <option key={tool.id} value={tool.id}>
-                    {tool.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="plan">Plan</Label>
-              <select
-                id="plan"
-                value={form.draft.planId}
-                suppressHydrationWarning
-                onChange={(event) => selectPlan(event.target.value)}
-                className="h-8 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-              >
-                {selectedTool.plans.map((plan) => (
-                  <option key={plan.id} value={plan.id}>
-                    {plan.name} {plan.billingUnit === "seat" ? `- ${currency(plan.monthlyPrice)}/seat` : ""}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
+      <div className="space-y-3">
+        {tools.map((tool, index) => {
+          const pricing = getToolPricing(tool.toolId)
+          const plan = getPlanPricing(tool.toolId, tool.planId)
 
-          <div className="grid gap-4 sm:grid-cols-3">
-            <div className="space-y-2">
-              <Label htmlFor="seats">Total seats</Label>
-              <Input id="seats" type="number" min="1" value={form.draft.seats} onChange={(event) => updateSeats(event.target.value)} />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="active-users">Active users</Label>
-              <Input
-                id="active-users"
-                type="number"
-                min="0"
-                value={form.draft.activeUsers}
-                onChange={(event) => updateDraft({ activeUsers: event.target.value })}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="monthly-spend">{isUsagePlan ? "Monthly spend ($)" : "Monthly cost ($)"}</Label>
-              <Input
-                id="monthly-spend"
-                type="number"
-                min="0"
-                value={form.draft.monthlySpend}
-                readOnly={!isUsagePlan}
-                onChange={(event) => updateDraft({ monthlySpend: event.target.value })}
-              />
-            </div>
-          </div>
-
-          {!isUsagePlan && (
-            <p className="text-sm text-muted-foreground">
-              {selectedPlan.name} is calculated at {currency(selectedPlan.monthlyPrice)} per seat: {currency(computedSeatSpend)}/mo.
-            </p>
-          )}
-          {activeUsers > seats && (
-            <p className="text-sm text-destructive">Active users cannot exceed total seats.</p>
-          )}
-
-          <Button onClick={addTool} disabled={!canAddTool} className="w-full">
-            <Plus className="size-4" />
-            Add tool
-          </Button>
-        </CardContent>
-      </Card>
-
-      {form.tools.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>AI stack ({form.tools.length})</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {form.tools.map((tool) => {
-              const savedTool = getPricingTool(tool.toolId)
-              const savedPlan = getPricingPlan(tool.toolId, tool.planId)
-
-              return (
-                <div key={tool.id} className="flex items-center justify-between gap-3 rounded-lg border p-3">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="font-medium">{savedTool?.name ?? "Unknown tool"}</p>
-                      <Badge variant="outline">{savedPlan?.name ?? "Custom plan"}</Badge>
-                    </div>
-                    <p className="text-sm text-muted-foreground">
-                      {currency(tool.monthlySpend)}/mo - {tool.activeUsers}/{tool.seats} active seats
-                    </p>
+          return (
+            <Card key={tool.id}>
+              <CardHeader className="grid-cols-[1fr_auto]">
+                <CardTitle>Tool {index + 1}</CardTitle>
+                <Button variant="ghost" size="icon" onClick={() => removeTool(tool.id)} aria-label="Remove tool">
+                  <Trash2 />
+                </Button>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor={`${tool.id}-tool`}>Tool</Label>
+                    <select
+                      id={`${tool.id}-tool`}
+                      suppressHydrationWarning
+                      className="h-8 w-full rounded-lg border border-input bg-background px-2.5 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                      value={tool.toolId}
+                      onChange={(event) => updateTool(tool.id, { toolId: event.target.value as ToolId })}
+                    >
+                      {TOOL_PRICING.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.name}
+                        </option>
+                      ))}
+                    </select>
                   </div>
-                  <Button variant="ghost" size="icon" onClick={() => removeTool(tool.id)} aria-label={`Remove ${savedTool?.name ?? "tool"}`}>
-                    <Trash2 className="size-4 text-destructive" />
-                  </Button>
+                  <div className="space-y-2">
+                    <Label htmlFor={`${tool.id}-plan`}>Plan</Label>
+                    <select
+                      id={`${tool.id}-plan`}
+                      suppressHydrationWarning
+                      className="h-8 w-full rounded-lg border border-input bg-background px-2.5 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                      value={tool.planId}
+                      onChange={(event) => updateTool(tool.id, { planId: event.target.value })}
+                    >
+                      {pricing?.plans.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.name} {item.monthlyPrice > 0 ? `($${item.monthlyPrice}/mo)` : "(manual spend)"}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
-              )
-            })}
 
-            <Button onClick={runAudit} disabled={!canRunAudit} className="w-full">
-              Run audit
-            </Button>
-          </CardContent>
-        </Card>
-      )}
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div className="space-y-2">
+                    <Label htmlFor={`${tool.id}-spend`}>Monthly spend</Label>
+                    <Input
+                      id={`${tool.id}-spend`}
+                      min={0}
+                      type="number"
+                      value={tool.monthlySpend}
+                      onChange={(event) => updateTool(tool.id, { monthlySpend: Number(event.target.value) })}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor={`${tool.id}-seats`}>Paid seats</Label>
+                    <Input
+                      id={`${tool.id}-seats`}
+                      min={1}
+                      type="number"
+                      value={tool.totalSeats}
+                      onChange={(event) => updateTool(tool.id, { totalSeats: Number(event.target.value) })}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor={`${tool.id}-active`}>Active users</Label>
+                    <Input
+                      id={`${tool.id}-active`}
+                      min={0}
+                      type="number"
+                      value={tool.activeUsers}
+                      onChange={(event) => updateTool(tool.id, { activeUsers: Number(event.target.value) })}
+                    />
+                  </div>
+                </div>
+
+                <p className="text-xs text-muted-foreground">
+                  {plan?.notes ?? "Seat spend is estimated from plan price and seats. Adjust it if your invoice differs."}
+                </p>
+              </CardContent>
+            </Card>
+          )
+        })}
+      </div>
+
+      <div className="flex flex-col gap-3 sm:flex-row">
+        <Button variant="outline" onClick={addTool} className="sm:flex-1">
+          <Plus />
+          Add tool
+        </Button>
+        <Button disabled={!canRunAudit} onClick={() => onSubmit({ teamSize, useCase, tools })} className="sm:flex-1">
+          Run audit
+        </Button>
+      </div>
     </div>
   )
 }
