@@ -1,5 +1,6 @@
 "use client"
 
+import Link from "next/link"
 import { RotateCcw } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -12,7 +13,19 @@ const riskVariant = {
   high: "destructive",
 } as const
 
-export default function AuditResults({ result, onReset }: { result: AuditResult; onReset: () => void }) {
+export default function AuditResults({
+  result,
+  onReset,
+  shareUrl,
+  isSaving = false,
+  saveError,
+}: {
+  result: AuditResult
+  onReset?: () => void
+  shareUrl?: string | null
+  isSaving?: boolean
+  saveError?: string | null
+}) {
   return (
     <div className="space-y-6">
       <section className="rounded-xl border bg-card p-5 text-card-foreground ring-1 ring-foreground/5">
@@ -54,6 +67,25 @@ export default function AuditResults({ result, onReset }: { result: AuditResult;
           </CardContent>
         </Card>
       )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Share report</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {isSaving && <p className="text-sm text-muted-foreground">Saving a public version of this audit...</p>}
+          {saveError && <p className="text-sm text-destructive">{saveError}</p>}
+          {shareUrl && (
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <p className="break-all text-sm text-muted-foreground">{shareUrl}</p>
+              <Button asChild variant="outline">
+                <Link href={shareUrl}>Open</Link>
+              </Button>
+            </div>
+          )}
+          {!isSaving && !shareUrl && !saveError && <p className="text-sm text-muted-foreground">Run an audit to create a public share link.</p>}
+        </CardContent>
+      </Card>
 
       <div className="space-y-3">
         {result.tools.map((tool) => (
@@ -99,10 +131,12 @@ export default function AuditResults({ result, onReset }: { result: AuditResult;
         ))}
       </div>
 
-      <Button variant="outline" onClick={onReset} className="w-full">
-        <RotateCcw />
-        Edit inputs
-      </Button>
+      {onReset && (
+        <Button variant="outline" onClick={onReset} className="w-full">
+          <RotateCcw />
+          Edit inputs
+        </Button>
+      )}
     </div>
   )
 }

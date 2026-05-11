@@ -7,9 +7,48 @@ import { AuditResult, runAudit } from "@/lib/auditEngine"
 
 export default function Home() {
   const [result, setResult] = useState<AuditResult | null>(null)
+  const [shareUrl, setShareUrl] = useState<string | null>(null)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [isSaving, setIsSaving] = useState(false)
 
-  function handleSubmit(values: AuditFormValues) {
-    setResult(runAudit(values))
+  async function handleSubmit(values: AuditFormValues) {
+    const auditResult = runAudit(values)
+    setResult(auditResult)
+    setShareUrl(null)
+    setSaveError(null)
+    setIsSaving(true)
+
+    try {
+      const response = await fetch("/api/audits", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          input: values,
+          result: auditResult,
+        }),
+      })
+
+      const data = (await response.json()) as {
+        audit?: {
+          result: AuditResult
+        }
+        shareUrl?: string
+        error?: string
+      }
+
+      if (!response.ok || !data.audit || !data.shareUrl) {
+        throw new Error(data.error ?? "Could not create share link.")
+      }
+
+      setResult(data.audit.result)
+      setShareUrl(new URL(data.shareUrl, window.location.origin).toString())
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "Could not create share link.")
+    } finally {
+      setIsSaving(false)
+    }
   }
 
   return (
@@ -20,7 +59,21 @@ export default function Home() {
           <p className="text-muted-foreground">Find out which AI tools your team is overpaying for in 30 seconds.</p>
         </div>
 
-        {result ? <AuditResults result={result} onReset={() => setResult(null)} /> : <SpendForm onSubmit={handleSubmit} />}
+        {result ? (
+          <AuditResults
+            result={result}
+            shareUrl={shareUrl}
+            isSaving={isSaving}
+            saveError={saveError}
+            onReset={() => {
+              setResult(null)
+              setShareUrl(null)
+              setSaveError(null)
+            }}
+          />
+        ) : (
+          <SpendForm onSubmit={handleSubmit} />
+        )}
       </div>
     </main>
   )
