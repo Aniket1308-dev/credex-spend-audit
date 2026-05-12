@@ -2,9 +2,11 @@
 
 import Link from "next/link"
 import { RotateCcw } from "lucide-react"
+import { useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
 import { AuditResult } from "@/lib/auditEngine"
 
 const riskVariant = {
@@ -19,13 +21,33 @@ export default function AuditResults({
   shareUrl,
   isSaving = false,
   saveError,
+  slug,
 }: {
   result: AuditResult
   onReset?: () => void
   shareUrl?: string | null
   isSaving?: boolean
   saveError?: string | null
+  slug?: string | null
 }) {
+  const [email, setEmail] = useState("")
+  const [company, setCompany] = useState("")
+  const [role, setRole] = useState("")
+  const [submitted, setSubmitted] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+
+  async function handleLeadSubmit() {
+    if (!email) return
+    setSubmitting(true)
+    await fetch("/api/leads", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, company, role, audit_slug: slug }),
+    })
+    setSubmitting(false)
+    setSubmitted(true)
+  }
+
   return (
     <div className="space-y-6">
       <section className="rounded-xl border bg-card p-5 text-card-foreground ring-1 ring-foreground/5">
@@ -84,6 +106,45 @@ export default function AuditResults({
             </div>
           )}
           {!isSaving && !shareUrl && !saveError && <p className="text-sm text-muted-foreground">Run an audit to create a public share link.</p>}
+        </CardContent>
+      </Card>
+
+      {/* Lead Capture Form */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Get this report in your inbox</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {submitted ? (
+            <p className="text-sm text-green-600 font-medium">✅ Report sent to {email}</p>
+          ) : (
+            <div className="flex flex-col gap-3">
+              <Input
+                type="email"
+                placeholder="Work email *"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+              <Input
+                type="text"
+                placeholder="Company"
+                value={company}
+                onChange={(e) => setCompany(e.target.value)}
+              />
+              <Input
+                type="text"
+                placeholder="Your role"
+                value={role}
+                onChange={(e) => setRole(e.target.value)}
+              />
+              <Button
+                onClick={handleLeadSubmit}
+                disabled={submitting || !email}
+              >
+                {submitting ? "Sending..." : "Send Report"}
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
 
