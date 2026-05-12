@@ -8,6 +8,7 @@ import { AuditResult, runAudit } from "@/lib/auditEngine"
 export default function Home() {
   const [result, setResult] = useState<AuditResult | null>(null)
   const [shareUrl, setShareUrl] = useState<string | null>(null)
+  const [slug, setSlug] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
 
@@ -15,6 +16,7 @@ export default function Home() {
     const auditResult = runAudit(values)
     setResult(auditResult)
     setShareUrl(null)
+    setSlug(null)
     setSaveError(null)
     setIsSaving(true)
 
@@ -42,6 +44,8 @@ export default function Home() {
         throw new Error(data.error ?? "Could not create share link.")
       }
 
+      const extractedSlug = data.shareUrl.split("/").pop() ?? null
+      setSlug(extractedSlug)
       setResult(data.audit.result)
       setShareUrl(new URL(data.shareUrl, window.location.origin).toString())
     } catch (error) {
@@ -63,11 +67,13 @@ export default function Home() {
           <AuditResults
             result={result}
             shareUrl={shareUrl}
+            slug={slug}
             isSaving={isSaving}
             saveError={saveError}
             onReset={() => {
               setResult(null)
               setShareUrl(null)
+              setSlug(null)
               setSaveError(null)
             }}
           />
